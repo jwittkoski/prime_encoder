@@ -68,13 +68,13 @@ These directions assume a few things:
 * Put <tt>prime_encoder</tt> into <tt>/opt/sagetv/hdhomerun</tt> and make sure it's executable:
  
         chown sagetv:sagetv /opt/sagetv/hdhomerun/prime_encoder
-        chown +x /opt/sagetv/hdhomerun/prime_encoder
+        chmod +x /opt/sagetv/hdhomerun/prime_encoder
 
 * Get the Linux <tt>hdhomerun_config</tt> from SD and place it in <tt>/opt/sagetv/hdhomerun/</tt>
   and make sure it's executable:
 
         chown sagetv:sagetv /opt/sagetv/hdhomerun/hdhomerun_config
-        chown +x /opt/sagetv/hdhomeru/hdhomerun_config
+        chmod +x /opt/sagetv/hdhomeru/hdhomerun_config
 
 * Make sure your HDHR Prime is already configured and enabled for CC reception. Use the SD provided tools
   to test that you can view video before continuing.
