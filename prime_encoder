@@ -1,0 +1,574 @@
+#!/usr/bin/env perl
+#
+# prime_encoder
+#
+# Act as a SageTV network encoder with the HDHomerun Prime as a
+# video source.
+#
+# Copyright (c) 2013 John P. Wittkoski. All Rights Reserved.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of either:
+#
+# a) the GNU Library General Public License as published by the Free
+#    Software Foundation; either version 2, or (at your option) any
+#    later version, or
+#
+# b) the "Artistic License" which comes with Perl source code.
+#
+use strict;
+use Getopt::Std;
+use File::Basename;
+use IO::Select;
+use IO::Handle;
+use IO::Socket;
+use IO::Socket::INET;
+use IPC::Run;
+use Proc::Daemon;
+use Data::Dumper;
+
+# flush after every write
+$| = 1;
+
+#
+# User configurable options
+#
+  
+#
+# Directories for video files
+# The requested video file destination must be under one of these
+# paths. If not, the command is ignored.
+# TO DO: this is not enabled yet
+#
+my @valid_dirs = ( "/var/media/tv" );
+
+#
+# HDHomeRun Devices
+#
+#   name    - a name of the device (this will appear in the SageTV UI)
+#   id      - the ID for this device - use 'hdhomerun_config discover' to find this
+#   tuner   - the tuner for this this device ID - should only be 0, 1 or 2
+#   port    - a port for this encoder to listen on - must be unique
+#   enabled - whether to use this encoder for tuning or not - 0 or 1
+#
+my $encoders = [ { name    => "HDHomerun Prime Tuner 0",
+                   id      => "11112222",
+                   tuner   => 0,
+                   port    => 7000,
+                   enabled => 1,
+                 },
+                 { name    => "HDHomerun Prime Tuner 1",
+                   id      => "11112222",
+                   tuner   => 1,
+                   port    => 7001,
+                   enabled => 1,
+                 },
+                 { name    => "HDHomerun Prime Tuner 2",
+                   id      => "11112222",
+                   tuner   => 2,
+                   port    => 7002,
+                   enabled => 1,
+                 },
+               ];
+
+# Program name
+my $me = "prime_encoder";
+
+# Where to log messages (if we are logging)
+my $log_dir = "/opt/sagetv/hdhomerun";
+my $log_file = "prime_encoder.log";
+
+# Full path to the hdhomerun_config command
+my $hdhomerun_config_cmd = "/opt/sagetv/hdhomerun/hdhomerun_config";
+
+# Full path to the ffmpeg command (must be version 1.2.1 or later)
+my $ffmpeg_cmd = "/opt/sagetv/hdhomerun/ffmpeg.2013.09.01";
+
+#
+# User configurable options end here
+#
+
+# Command line flags:
+#   -d - don't go into background and show all debugging output
+#   -q - don't log anything
+our ( $opt_d, $opt_q );
+getopts('dq');
+
+# TO DO: sanity checks on encoder values
+
+# Become a daemon if not in debug mode
+Proc::Daemon::Init() if ( ! $opt_d );
+
+logger("Starting");
+
+#
+# All the child processes we are watching
+#
+my $children = {};
+my $select = new IO::Select();
+
+#
+# Spawn discovery listener
+#
+my ( $listener_pid, $listener_h ) = spawn_discovery_listener();
+$children->{$listener_pid}->{pid} = $listener_pid;
+$children->{$listener_pid}->{h} = $listener_h;
+$select->add($listener_h);
+
+#
+# Spawn encoders
+#
+foreach my $encoder ( @$encoders ) {
+    if ( not $encoder->{enabled} ) {
+        logger("Tuner '$encoder->{name}' not enabled. Ignoring.");
+        next;
+    }
+
+    # TO DO: check for errors
+    my ($pid, $h) = spawn_encoder($encoder);
+    $children->{$pid}->{pid} = $pid;
+    $children->{$pid}->{h} = $h;
+    $children->{$pid}->{encoder} = $encoder;
+    $select->add($h);
+}
+
+$0 = "$me: Master";
+$SIG{TERM} = \&process_term;
+
+#
+# Wait for output from child processes and log it to the log file.
+#
+while(my @ready = $select->can_read) {
+    foreach my $fh ( @ready ) {
+
+        my $msg = "";
+        foreach my $child ( keys %$children ) {
+            next unless ( $children->{$child}->{h} == $fh );
+            my $name = $children->{$child}->{encoder}->{name};
+            if ( $name ) {
+                $msg .= "Tuner '$name': ";
+            }
+        }
+
+        if ( $fh->eof ) {
+            # Child exited (or closed their filehandle)
+            $select->remove($fh);
+            $fh->close;
+
+            foreach my $child ( keys %$children ) {
+                next unless ( $children->{$child}->{h} == $fh );
+                logger($msg . "stopped unexpectedly");
+            }
+
+            next;
+        }
+
+        # Children are sending terminated lines so we're not
+        # going to do anything fancy here.
+        while ( defined($_ = $fh->getline) ) {
+            my $data = $_;
+            chomp $data;
+            logger($msg . $data);
+        }
+    }
+}
+
+# TO DO: if all children die we end up here - try and restart?
+# TO DO: at least a message
+
+exit;
+
+#
+# Listen for probes for remote encoders from the SageTV server and
+# reply with the port(s) of the encoders.
+#
+sub spawn_discovery_listener {
+    my $h = new IO::Handle();
+    my $pid = open($h, "-|");
+    # TO DO: better error handling
+    defined($pid) || die "can't fork: $!";
+    $h->blocking(0);
+
+    if ( $pid != 0 ) {
+        return ( $pid, $h );
+    }
+
+    $0 = "$me: Discovery Listener";
+    my $server_port = 8271;
+
+    # TO DO: better error handling
+    my $server = IO::Socket::INET->new(LocalPort => $server_port,
+                                       Proto     => "udp")
+        or die "Couldn't create discovery listener on port $server_port: $@";
+
+    my $request = "";
+    my $max_read = 256;
+    my $flags = "";
+
+    info("Discovery Listener started");
+
+    while ($server->recv($request, $max_read, $flags)) {
+
+        my ( $prefix, $version ) = unpack("a3a3",$request);
+
+        foreach my $encoder ( @$encoders ) {
+            if ( $encoder->{enabled} ) {
+                my $name = $encoder->{name};
+                my $port = $encoder->{port};
+                my $length = length($name);
+
+                #
+                # Craft response packet
+                # 0-2 -> same
+                # 3-5 -> 4, 1, 0 (version supported)
+                # 6   -> msb of encoder port
+                # 7   -> lsb of encoder port
+                # 8   -> length of encoder name
+                # 9+  -> encoder name
+                #
+                # The "supported version" sent back in this reply is
+                # the version from the received packet. However, this
+                # doesn't seem to matter as each tuning device will also
+                # be asked what version it supports.
+                #
+                my $response = pack("a3a3nCA$length", $prefix, $version, $port, $length, $name);
+                $server->send($response);
+
+                info("Discovery service announced '$name'"); 
+            }
+        }
+    } 
+}
+
+#
+# Spawn listeners for each encoder
+#
+sub spawn_encoder {
+    my $encoder = shift @_;
+
+    my $h = new IO::Handle();
+    my $pid = open($h, "-|");
+    # TO DO: better error handling
+    defined($pid) || die "can't fork: $!";
+    $h->blocking(0);
+
+    if ( $pid != 0 ) {
+        return ( $pid, $h );
+    }
+
+    # TO DO: make sure all unneeded filehandles are disconnected from parent
+
+    my $name = $encoder->{name};
+    my $id = $encoder->{id};
+    my $tuner = $encoder->{tuner};
+    my $port = $encoder->{port};
+    $0 = "$me: $name";
+
+    my $socket = new IO::Socket::INET(LocalPort => $port,
+                                      Proto => 'tcp',
+                                      Listen => 5,
+                                      Reuse => 1 )
+        or die "Couldn't create encoder listener on port $port: $@";
+
+    info("Waiting for client connection");
+
+    $encoder->{h} = undef;
+    $encoder->{recording} = undef;
+
+    #
+    # Wait for incoming network encoder commands from server
+    #
+    # TO DO: If recording process dies before a STOP is received,
+    #        this loop will not catch it until the STOP is seen.
+    #        If this process dies after a recording has started
+    #        the recording process will continue to run 
+    #        (forever - eventually filling up the disk) but anyone
+    #        watching the show live will see a pause because
+    #        this process is not responding.
+    #        Add sanity check: if we haven't gotten a FILE_SIZE
+    #        for this recording in a while, stop? FILE_SIZE
+    #        is called during all recordings, although much more
+    #        often when someone is watching live.
+    #        Or, drop out of the accept loop periodically to
+    #        check for these conditions.
+    #
+    # TO DO: use IO::Select here?
+    while ( my $client_socket = $socket->accept() ) {
+
+        # read operation on the newly accepted client
+        my $data = "";
+        $client_socket->recv($data,1024);
+        $data =~ s/\r\n/\n/g;
+        chomp $data;
+
+        # write operation on the newly accepted client.
+        my $outdata = "";
+        if  ( $data eq "PROPERTIES" ) {
+
+            my $props = "";
+            $props .= "mmc/encoders/1234567/1/0/available_channels=\r\n";
+            $props .= "mmc/encoders/1234567/1/0/brightness=-1\r\n";
+            $props .= "mmc/encoders/1234567/1/0/broadcast_standard=\r\n";
+            $props .= "mmc/encoders/1234567/1/0/contrast=-1\r\n";
+            $props .= "mmc/encoders/1234567/1/0/device_name=\r\n";
+            $props .= "mmc/encoders/1234567/1/0/hue=-1\r\n";
+            $props .= "mmc/encoders/1234567/1/0/last_channel=\r\n";
+            $props .= "mmc/encoders/1234567/1/0/saturation=-1\r\n";
+            $props .= "mmc/encoders/1234567/1/0/sharpness=-1\r\n";
+            $props .= "mmc/encoders/1234567/1/0/tuning_mode=Cable\r\n";
+            $props .= "mmc/encoders/1234567/1/0/tuning_plugin=\r\n";
+            $props .= "mmc/encoders/1234567/1/0/tuning_plugin_port=0\r\n";
+            $props .= "mmc/encoders/1234567/1/0/video_crossbar_index=0\r\n";
+            $props .= "mmc/encoders/1234567/1/0/video_crossbar_type=1\r\n";
+            $props .= "mmc/encoders/1234567/audio_capture_device_name=\r\n";
+            $props .= "mmc/encoders/1234567/broadcast_standard=\r\n";
+            $props .= "mmc/encoders/1234567/capture_config=2050\r\n";
+            $props .= "mmc/encoders/1234567/default_device_quality=\r\n";
+            $props .= "mmc/encoders/1234567/delay_to_wait_after_tuning=0\r\n";
+            $props .= "mmc/encoders/1234567/encoder_merit=0\r\n";
+            $props .= "mmc/encoders/1234567/fast_network_encoder_switch=false\r\n";
+            $props .= "mmc/encoders/1234567/forced_video_storage_path_prefix=\r\n";
+            $props .= "mmc/encoders/1234567/last_cross_index=0\r\n";
+            $props .= "mmc/encoders/1234567/last_cross_type=1\r\n";
+            $props .= "mmc/encoders/1234567/live_audio_input=\r\n";
+            $props .= "mmc/encoders/1234567/multicast_host=\r\n";
+            $props .= "mmc/encoders/1234567/never_stop_encoding=false\r\n";
+            $props .= "mmc/encoders/1234567/video_capture_device_name=$name\r\n";
+            $props .= "mmc/encoders/1234567/video_capture_device_num=0\r\n";
+            $props .= "mmc/encoders/1234567/video_encoding_params=Great\r\n";
+
+            my $lines = scalar split(/\r\n/, $props);
+            $outdata .= "$lines\r\n";
+            $outdata .= $props;
+            $outdata .= "OK\r\n";
+
+            info("Sending PROPERTIES for '$name'");
+
+        } elsif ( $data =~ /^START (.+?)\|([\d-]+)\|(\d+)\|(.+?)\|(.+?)$/ ) {
+            my $tuner_name = $1;
+            my $channel = $2;
+            my $run_time = $3;
+            my $file_path = remap_file_path($4);
+            my $quality = $5;
+
+            # TO DO: sanity check - is location writable?
+            # TO DO: sanity check - only save files to known media paths
+            # TO DO: check for '-' for channel vs. vchannel (for QAM support)
+
+            #
+            # Note that the START command varies depending on whether a tuner
+            # reports supporting version 2.1 or 4.1.
+            #
+            # Example (2.1):
+            #   START HDHomerun Prime Tuner 2 TV Tuner|621|2752211041962|/var/media/tv/BrainGames-YouDecide-14339962-0.mpg|DVD Standard Play
+            # Example (4.1):
+            #   START HDHomerun Prime Tuner 1 TV Tuner|384046299|781|2739076765752|/var/media/tv/KickinIt-MyLeftFoot-13153453-0.mpg|DVD Standard Play
+            #
+            # Note: SageTV docs say run_time is in the recording duration in milliseconds but
+            #       the values match don't match that. Instead they match the
+            #       the start time ( run_time / 1000 / 2 == start time in unix epoch time )
+            #
+
+            #
+            # Change the channel
+            #
+            info("Tuning channel $channel on device $id tuner $tuner filename: $file_path");
+            system("$hdhomerun_config_cmd $id set /tuner$tuner/vchannel $channel");
+
+            #
+            # Use the hdhomerun_config command to stream the file from the Prime.
+            # The stream is passed through ffmpeg (without changing codecs) to
+            # deal with possible corruption of the time code values, which seems
+            # to happen mostly when shows switch in and out of 480i mode during
+            # some commercials.
+            #
+            my @cmd1 = ();
+            push(@cmd1, $hdhomerun_config_cmd);
+            push(@cmd1, $id);
+            push(@cmd1, "save");
+            push(@cmd1, $tuner);
+            push(@cmd1, "-");
+
+            my @cmd2 = ();
+            push(@cmd2, $ffmpeg_cmd);
+            push(@cmd2, "-y");
+            push(@cmd2, "-v", "quiet");
+            push(@cmd2, "-i", "-");
+            push(@cmd2, "-f", "dvd");
+            push(@cmd2, "-vcodec", "copy");
+            push(@cmd2, "-acodec", "copy");
+            push(@cmd2, $file_path);
+
+            $encoder->{h} = IPC::Run::start \@cmd1, '|', \@cmd2;
+
+            $encoder->{recording} = { tuner_name => $tuner_name,
+                                      channel    => $channel,
+                                      run_time   => $run_time,
+                                      file_path  => $file_path,
+                                      quality    => $quality,
+                                    };
+            $outdata = "OK\r\n";
+
+        } elsif ( $data eq "STOP" ) {
+            # Note: Protocol version 4.1 does "STOP tuner_name"
+            info("Stopping recording");
+            if ( $encoder->{h} ) {
+                $encoder->{h}->kill_kill(grace=>1);
+            }
+            $outdata = "OK\r\n";
+            # TO DO: do finish on handle to clean up
+            $encoder->{h} = undef;
+            $encoder->{recording} = undef;
+
+        } elsif  ( $data =~ /^GET_FILE_SIZE (.+?)$/ ) {
+            # Note: Same in 2.1, 3.0, 4.1
+            my $file_path = remap_file_path($1);
+            my $file_size = ( -s $file_path ) || 0;
+            $outdata = "$file_size\r\n";
+
+        } elsif  ( $data eq "NOOP" ) {
+            $outdata = "OK\r\n";
+
+        } elsif  ( $data eq "VERSION" ) {
+            # Note: There seems to be several network encoder versions - 2.1, 3.0 and 4.1
+            #       This script currently only supports 2.1 but there are notes about
+            #       about the other version that have been observed.
+            info("Reporting VERSION 2.1");
+            $outdata = "2.1\r\n";
+
+        } elsif ( $data =~ /^SWITCH ([\d-]+)\|(.+?)$/ ) {
+            my $channel = $1;
+            my $file_name = remap_file_path($2);
+            info("Warning: SWITCH command seen but unsupported: $data");
+            $outdata = "OK\r\n";
+
+        } elsif  ( $data eq "GET_SIZE" ) {
+            # Return the file size of the current recording
+            # Note: GET_SIZE not seen in testing, GET_FILE_SIZE always seems to be used
+            info("Warning: GET_SIZE command seen but unsupported: $data");
+            $outdata = "OK\r\n";
+
+        } elsif ( $data =~ /^BUFFER (.+?)\|([\d-]+)\|(\d+)\|(.+?)\|(.+?)$/ ) {
+            # Note: Although this script only supports the 2.1 network encoding
+            #       commands, version 3.0 and higher seem to have a slightly different format:
+            #       tuner_name|run_time?|channel|buffer_size|file|quality
+            #       Example (3.0+):
+            #          BUFFER WebFeedEncoder-1 TV Tuner|467819771|1|16777216|/var/media/tv/WebFeedEncoder1on10112146969TVTuner-0.mpgbuf|DVD Standard Play
+            my $tuner_name = $1;
+            my $channel = $2;
+            my $file_size = $3;
+            my $file_path = remap_file_path($4);
+            my $quality = $5;
+            info("Warning: BUFFER command seen but unsupported: $data");
+            $outdata = "OK\r\n";
+
+        } elsif ( $data =~ /^BUFFER_SWITCH ([\d-]+)\|(.+?)$/ ) {
+            my $channel = $1;
+            my $file_name = remap_file_path($2);
+            info("Warning: BUFFER_SWITCH command seen but unsupported: $data");
+            $outdata = "OK\r\n";
+
+        } elsif ( $data =~ /^TUNE ([\d-]+)$/ ) {
+            my $channel = $1;
+            info("Warning: TUNE command seen but unsupported: $data");
+            $outdata = "OK\r\n";
+
+        } elsif ( $data =~ /^AUTOTUNE ([\d-]+)$/ ) {
+            my $channel = $1;
+            info("Warning: AUTOTUNE command seen but unsupported: $data");
+            $outdata = "OK\r\n";
+
+        } else {
+            info("Warning: UNKNOWN COMMAND SEEN: $data");
+            $outdata = "OK\r\n";
+        }
+
+        $client_socket->send($outdata);
+
+        $client_socket->flush();
+        $client_socket->close();
+
+    }
+
+}
+
+#
+# Remap the file path if necessary
+# If this script is acting as a network encoder for a SageTV server running
+# on Windows, the file paths that are sent are Windows style paths.
+# If needed here you can remap the Windows path to wherever you have the
+# recording drive mapped to locally.
+#
+sub remap_file_path {
+    my $path = shift @_;
+
+    # remap here if needed
+
+    return $path;
+}
+
+#
+# Send the TERM signal to any running children
+# TO DO: This does not take care of the grandchildren!
+# TO DO: Have a process_term for the children to use
+#        kill_kill on the encoder process as well.
+#
+sub process_term {
+    foreach my $child ( keys %$children ) {
+        my $pid = $children->{$child}->{pid};
+        if ( $pid ) {
+            logger("kill on $child");
+            kill "TERM", $pid;
+        }
+    }
+
+    # TO DO: not needed?
+    #exit 0;
+}
+
+#
+# Used by the child to log
+#
+sub info {
+    my $line = shift @_;
+    print STDOUT "$line\n";
+}
+
+#
+# Used by the child to debug
+# TO DO: not used, remove?
+#
+sub debug {
+    if ( $opt_d ) {
+        info(@_);
+    }
+}
+
+#
+# Simple logging
+#
+# Only the parent process logs to the log file.
+# Child processes write to STDOUT which the parent sees and
+# writes to the log file.
+# 
+sub logger {
+    my ($msg) = @_;
+
+    return if ($opt_q);
+
+    $msg = localtime(time) . " $msg";
+
+    if ($opt_d) {
+        print "$msg\n";
+    } else {
+        open my $fh, ">>", "$log_dir/$log_file" or return;
+        print $fh "$msg\n" or return;
+        close $fh;
+    }
+}
+
+# For debugging
+sub _as_hex {
+   return unpack("H*", shift @_);
+}
+
