@@ -141,5 +141,5 @@ These directions assume a few things:
 
         Fri Aug  9 22:06:52 2013 Tuner 'HDHomerun Prime Tuner 1': Tuning channel 506 on device 131760B8 tuner 1 filename: /var/media/tv/TheBigBangTheory-TheInfestationHypothesis-15413766-0.mpg
 
-* If you need to stop prime_encoder, just <tt>ps -ef "grep prime_encoder</tt>. You should see 2 processes plus
+* If you need to stop prime_encoder, just <tt>ps -ef | grep prime_encoder</tt>. You should see 2 processes plus
   one for each encoder you defined. Killing the "Main" process will stop the others.
