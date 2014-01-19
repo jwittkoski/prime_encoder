@@ -1,0 +1,30 @@
+#!/bin/sh
+#
+# prime_encoder
+#
+
+test -f /opt/sagetv/hdhomerun/prime_encoder || exit 0
+
+case "$1" in
+  start)
+    echo -n "Starting prime_encoder daemon:"
+      echo -n " prime_encoder"
+      start-stop-daemon --start --chuid sagetv:sagetv --exec /opt/sagetv/hdhomerun/prime_encoder
+    echo "."
+    ;;
+  stop)
+    echo -n "Stopping prime_encoder daemon:"
+    echo -n " prime_encoder"
+    start-stop-daemon --stop --quiet --name prime_encoder
+    echo "."
+    ;;
+  restart)
+    $0 stop
+    $0 start
+    ;;
+  *)
+    echo "Usage: /etc/init.d/prime_encoder {start|stop|restart}"
+    exit 1
+esac
+
+exit 0
