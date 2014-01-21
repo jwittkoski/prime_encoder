@@ -27,7 +27,7 @@ The SageTV server will automatically discover network encoders. It sends command
 to record video and tells the encoders where to dump the video file, so the only config option that needs to
 be changed on the SageTV server is to enable discovery.
 
-An OS startup script for boot time is not provided, so make sure you start it manually if your server reboots.
+Be sure to install a startup script so that prime_encoder is started at boot time, a basic example Ubuntu script (<tt>prime_encoder.init</tt>) is included.
 
 Or, you can add this to the bottom of /opt/sagetv/server/sagesettings, and the encoder will start when
 the SageTV process starts:
