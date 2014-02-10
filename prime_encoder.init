@@ -16,6 +16,9 @@ case "$1" in
     echo -n "Stopping prime_encoder daemon:"
     echo -n " prime_encoder"
     start-stop-daemon --stop --quiet --name prime_encoder
+    # prime_encoder sets $0 but due to how perl 5.14+ sets $0 (with prctl), start-stop-daemon
+    # can't find it, so use pkill too.
+    pkill prime_encoder
     echo "."
     ;;
   restart)
