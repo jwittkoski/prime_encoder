@@ -74,7 +74,7 @@ These directions assume a few things:
   and make sure it's executable:
 
         chown sagetv:sagetv /opt/sagetv/hdhomerun/hdhomerun_config
-        chmod +x /opt/sagetv/hdhomeru/hdhomerun_config
+        chmod +x /opt/sagetv/hdhomerun/hdhomerun_config
 
 * Make sure your HDHR Prime is already configured and enabled for CC reception. Use the SD provided tools
   to test that you can view video before continuing.
