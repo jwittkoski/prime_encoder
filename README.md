@@ -1,11 +1,11 @@
-#prime_encoder
+# prime_encoder
 
 prime_encoder is network encoder for SageTV which tunes and streams video from an HDHomerunPrime.
 
 prime_encoder is currently considered beta. There are some things that need to be cleaned up in
 the code, but it has been my primary method of recording shows for the last few months with no problems.
 
-##Background
+## Background
 
 When the Silicon Dust HDHomerunPrime was released using a Cable Card suddenly seemed like a possible
 option with SageTV since some cable providers have channels marked as "copy freely". However, getting
@@ -37,7 +37,7 @@ the SageTV process starts:
 Note that not all commands are currently supported. Primarily this means you can't yet "preview" channels
 from the Setup Video Sources screen.
 
-##Instructions
+## Instructions
 
 These directions assume a few things:
 
@@ -58,7 +58,7 @@ These directions assume a few things:
 * If your Linux box is running a host firewall, you'll need to open holes for UDP port 8271 and TCP
   ports you define later for each encoder.
 
-##Install steps
+## Install steps
 
 * Create a place for the script:
 
