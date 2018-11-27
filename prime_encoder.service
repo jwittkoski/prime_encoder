@@ -1,0 +1,12 @@
+[Unit]
+Description=HDHomerun Prime Encoder
+After=syslog.target network.target
+
+[Service]
+Type=forking
+ExecStart=/usr/bin/perl /opt/sagetv/hdhomerun/prime_encoder
+ExecStop=/usr/bin/pkill -9 -f prime_encoder
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
