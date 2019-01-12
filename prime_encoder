@@ -74,6 +74,9 @@ my $encoders = [ { name    => "HDHomerun Prime Tuner 0",
 # Program name
 my $me = "prime_encoder";
 
+# Program version
+my $version = "1.0.4";
+
 # Where to log messages (if we are logging)
 my $log_dir = "/opt/sagetv/hdhomerun";
 my $log_file = "prime_encoder.log";
@@ -583,10 +586,11 @@ sub _as_hex {
 # Usage message
 sub usage {
     print STDERR <<UsageMessageEnd;
+$me $version
 
 Start network encoders for SageTV.
 
-Usage: $0 [options]
+Usage: $me [options]
     -d | --debug        Don't go into background and show all debugging output
     -q | --quiet        Don't log anything
     -h | --help         Show help (this message)
