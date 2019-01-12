@@ -35,14 +35,6 @@ $| = 1;
 #
   
 #
-# Directories for video files
-# The requested video file destination must be under one of these
-# paths. If not, the command is ignored.
-# TO DO: this is not enabled yet
-#
-my @valid_dirs = ( "/var/media/tv" );
-
-#
 # HDHomeRun Devices
 #
 #   name    - a name of the device (this will appear in the SageTV UI)
@@ -75,7 +67,7 @@ my $encoders = [ { name    => "HDHomerun Prime Tuner 0",
 my $me = "prime_encoder";
 
 # Program version
-my $version = "1.0.4";
+my $version = "1.0.5";
 
 # Where to log messages (if we are logging)
 my $log_dir = "/opt/sagetv/hdhomerun";
@@ -546,16 +538,6 @@ sub info {
 }
 
 #
-# Used by the child to debug
-# TO DO: not used, remove?
-#
-sub debug {
-    if ( $opt_d ) {
-        info(@_);
-    }
-}
-
-#
 # Simple logging
 #
 # Only the parent process logs to the log file.
@@ -576,11 +558,6 @@ sub logger {
         print $fh "$msg\n" or return;
         close $fh;
     }
-}
-
-# For debugging
-sub _as_hex {
-   return unpack("H*", shift @_);
 }
 
 # Usage message
