@@ -5,7 +5,7 @@
 # Act as a SageTV network encoder with the HDHomerun Prime as a
 # video source.
 #
-# Copyright (c) 2013 John P. Wittkoski. All Rights Reserved.
+# Copyright (c) 2013-2019 John P. Wittkoski. All Rights Reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of either:
@@ -17,7 +17,7 @@
 # b) the "Artistic License" which comes with Perl source code.
 #
 use strict;
-use Getopt::Std;
+use Getopt::Long;
 use File::Basename;
 use IO::Select;
 use IO::Handle;
@@ -88,11 +88,19 @@ my $ffmpeg_cmd = "/opt/sagetv/hdhomerun/ffmpeg.2013.09.01";
 # User configurable options end here
 #
 
-# Command line flags:
-#   -d - don't go into background and show all debugging output
-#   -q - don't log anything
-our ( $opt_d, $opt_q );
-getopts('dq');
+#
+# Command line options
+#
+my $opt_d = 0;
+my $opt_q = 0;
+my $help = 0;
+if ( ! GetOptions( "d|debug" => \$opt_d,
+                   "q|quiet" => \$opt_q,
+                   "h|help"  => \$help,
+                 ) or $help ) {
+    usage();
+    exit;
+}
 
 # TO DO: sanity checks on encoder values
 
@@ -572,3 +580,15 @@ sub _as_hex {
    return unpack("H*", shift @_);
 }
 
+# Usage message
+sub usage {
+    print STDERR <<UsageMessageEnd;
+
+Start network encoders for SageTV.
+
+Usage: $0 [options]
+    -d | --debug        Don't go into background and show all debugging output
+    -q | --quiet        Don't log anything
+    -h | --help         Show help (this message)
+UsageMessageEnd
+}
