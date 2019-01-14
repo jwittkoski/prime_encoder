@@ -108,7 +108,7 @@ logger("Starting");
 # All the child processes we are watching
 #
 my $children = {};
-my $select = new IO::Select();
+my $select = IO::Select->new();
 
 #
 # Spawn discovery listener
@@ -186,7 +186,7 @@ exit;
 # reply with the port(s) of the encoders.
 #
 sub spawn_discovery_listener {
-    my $h = new IO::Handle();
+    my $h = IO::Handle->new();
     my $pid = open($h, "-|");
     # TO DO: better error handling
     defined($pid) || die "can't fork: $!";
@@ -249,7 +249,7 @@ sub spawn_discovery_listener {
 sub spawn_encoder {
     my $encoder = shift @_;
 
-    my $h = new IO::Handle();
+    my $h = IO::Handle->new();
     my $pid = open($h, "-|");
     # TO DO: better error handling
     defined($pid) || die "can't fork: $!";
@@ -267,10 +267,10 @@ sub spawn_encoder {
     my $port = $encoder->{port};
     $0 = "$me: $name";
 
-    my $socket = new IO::Socket::INET(LocalPort => $port,
-                                      Proto => 'tcp',
-                                      Listen => 5,
-                                      Reuse => 1 )
+    my $socket = IO::Socket::INET->new(LocalPort => $port,
+                                       Proto => 'tcp',
+                                       Listen => 5,
+                                       Reuse => 1 )
         or die "Couldn't create encoder listener on port $port: $@";
 
     info("Waiting for client connection");
