@@ -27,7 +27,7 @@ use IPC::Run;
 use Proc::Daemon;
 use Data::Dumper;
 
-# flush after every write
+# Flush stdout after every write
 $| = 1;
 
 #
@@ -191,6 +191,7 @@ sub spawn_discovery_listener {
     # TO DO: better error handling
     defined($pid) || die "can't fork: $!";
     $h->blocking(0);
+    $h->autoflush();
 
     if ( $pid != 0 ) {
         return ( $pid, $h );
@@ -254,6 +255,7 @@ sub spawn_encoder {
     # TO DO: better error handling
     defined($pid) || die "can't fork: $!";
     $h->blocking(0);
+    $h->autoflush();
 
     if ( $pid != 0 ) {
         return ( $pid, $h );
@@ -535,6 +537,7 @@ sub process_term {
 sub info {
     my $line = shift @_;
     print STDOUT "$line\n";
+    STDOUT->flush();
 }
 
 #
