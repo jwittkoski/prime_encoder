@@ -310,6 +310,8 @@ sub spawn_encoder {
         my $outdata = "";
         if  ( $data eq "PROPERTIES" ) {
 
+            info("Received: $data");
+
             my $props = "";
             $props .= "mmc/encoders/1234567/1/0/available_channels=\r\n";
             $props .= "mmc/encoders/1234567/1/0/brightness=-1\r\n";
@@ -347,9 +349,12 @@ sub spawn_encoder {
             $outdata .= $props;
             $outdata .= "OK\r\n";
 
-            info("Sending PROPERTIES for '$name'");
+            info("Sending PROPERTIES");
 
         } elsif ( $data =~ /^START (.+?)\|([\d-]+)\|(\d+)\|(.+?)\|(.+?)$/ ) {
+
+            info("Received: $data");
+
             my $tuner_name = $1;
             my $channel = $2;
             my $run_time = $3;
@@ -415,8 +420,16 @@ sub spawn_encoder {
             $outdata = "OK\r\n";
 
         } elsif ( $data eq "STOP" ) {
+
+            info("Received: $data");
+
             # Note: Protocol version 4.1 does "STOP tuner_name"
             info("Stopping recording");
+
+            if ( ! defined($encoder->{recording}) ) {
+                info("STOP received but not recording");
+            }
+
             if ( $encoder->{h} ) {
                 $encoder->{h}->kill_kill(grace=>1);
             }
