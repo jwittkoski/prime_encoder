@@ -168,8 +168,7 @@ while(my @ready = $select->can_read) {
 
         # Children are sending terminated lines so we're not
         # going to do anything fancy here.
-        while ( defined($_ = $fh->getline) ) {
-            my $data = $_;
+        while ( defined(my $data = $fh->getline) ) {
             chomp $data;
             logger($msg . $data);
         }
