@@ -1,0 +1,59 @@
+---
+#
+# Where to log messages (if we are logging)
+#
+logging:
+    dir: /opt/sagetv/hdhomerun
+    file: prime_encoder.log
+
+#
+# Encoders
+#
+#   name            - a name of the device (this will appear in the SageTV UI)
+#   id              - the ID for this device, used to identify the specific device
+#   enabled         - whether to use this encoder or not - 0 or 1
+#   cmd_tune        - command to tune the channel (optional)
+#   cmd_encode      - command to start the video capture
+#   cmd_postprocess - command to pipe video data through (optional)
+#
+#   Command strings can specify '%%CHANNEL%%' and/or '%%FILE_PATH%%' which will be replaced
+#   with the appropriate value.
+#
+encoders:
+    #
+    # Example for an HDHomerun Prime
+    # Change "12345678" to the ID of your Prime device
+    # 
+    - 
+        name: "HDHomerun Prime Tuner 0"
+        port: 7000
+        enabled: 1
+        cmd_tune: /opt/sagetv/hdhomerun/hdhomerun_config 12345678 set /tuner0/vchannel %%CHANNEL%%
+        cmd_encode: /opt/sagetv/hdhomerun/hdhomerun_config 12345678 save 0  -
+        cmd_postprocess: /usr/bin/ffmpeg -y -v quiet -i - -f dvd -vcodec copy -acodec copy %%FILE_PATH%%
+    - 
+        name: "HDHomerun Prime Tuner 1"
+        port: 7001
+        enabled: 1
+        cmd_tune: /opt/sagetv/hdhomerun/hdhomerun_config 12345678 set /tuner1/vchannel %%CHANNEL%%
+        cmd_encode: /opt/sagetv/hdhomerun/hdhomerun_config 12345678 save 1  -
+        cmd_postprocess: /usr/bin/ffmpeg -y -v quiet -i - -f dvd -vcodec copy -acodec copy %%FILE_PATH%%
+    - 
+        name: "HDHomerun Prime Tuner 2"
+        port: 7002
+        enabled: 1
+        cmd_tune: /opt/sagetv/hdhomerun/hdhomerun_config 12345678 set /tuner2/vchannel %%CHANNEL%%
+        cmd_encode: /opt/sagetv/hdhomerun/hdhomerun_config 12345678 save 2  -
+        cmd_postprocess: /usr/bin/ffmpeg -y -v quiet -i - -f dvd -vcodec copy -acodec copy %%FILE_PATH%%
+    #
+    # Example for a device attached to an HDPVR2
+    # Change "E505-00-12345678" to the ID of your HDPVR2 device
+    # Replace the cmd_tune command with whatever you use to tune your STB
+    # 
+    - 
+        name: "HDPVR2 STB-1"
+        port: 7003
+        enabled: 1
+        cmd_tune: /opt/sagetv/server/gentuner TUNE STB-1 %%CHANNEL%%
+        cmd_encode: /opt/Hauppauge/bin/hauppauge2 -s E505-00-12345678 -i 3 -a 3 -d 2 -o /dev/stdout
+        cmd_postprocess: /usr/bin/ffmpeg -y -v quiet -i - -f dvd -vcodec copy -acodec copy %%FILE_PATH%%

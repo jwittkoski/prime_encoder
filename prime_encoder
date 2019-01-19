@@ -2,8 +2,7 @@
 #
 # prime_encoder
 #
-# Act as a SageTV network encoder with the HDHomerun Prime as a
-# video source.
+# A SageTV network encoder
 #
 # Copyright (c) 2013-2019 John P. Wittkoski. All Rights Reserved.
 #
@@ -18,7 +17,10 @@
 #
 use strict;
 use Getopt::Long;
+use FindBin;
 use File::Basename;
+use Text::ParseWords ();
+use YAML::Tiny;
 use IO::Select;
 use IO::Handle;
 use IO::Socket;
@@ -30,58 +32,20 @@ use Data::Dumper;
 # Flush stdout after every write
 $| = 1;
 
-#
-# User configurable options
-#
-  
-#
-# HDHomeRun Devices
-#
-#   name    - a name of the device (this will appear in the SageTV UI)
-#   id      - the ID for this device - use 'hdhomerun_config discover' to find this
-#   tuner   - the tuner for this this device ID - should only be 0, 1 or 2
-#   port    - a port for this encoder to listen on - must be unique
-#   enabled - whether to use this encoder for tuning or not - 0 or 1
-#
-my $encoders = [ { name    => "HDHomerun Prime Tuner 0",
-                   id      => "11112222",
-                   tuner   => 0,
-                   port    => 7000,
-                   enabled => 1,
-                 },
-                 { name    => "HDHomerun Prime Tuner 1",
-                   id      => "11112222",
-                   tuner   => 1,
-                   port    => 7001,
-                   enabled => 1,
-                 },
-                 { name    => "HDHomerun Prime Tuner 2",
-                   id      => "11112222",
-                   tuner   => 2,
-                   port    => 7002,
-                   enabled => 1,
-                 },
-               ];
+# Change to the same directory as the script so we can find the config file
+chdir "$FindBin::Bin";
 
 # Program name
 my $me = "prime_encoder";
 
 # Program version
 my $version = "1.0.5";
-
-# Where to log messages (if we are logging)
-my $log_dir = "/opt/sagetv/hdhomerun";
-my $log_file = "prime_encoder.log";
-
-# Full path to the hdhomerun_config command
-my $hdhomerun_config_cmd = "/opt/sagetv/hdhomerun/hdhomerun_config";
-
-# Full path to the ffmpeg command (must be version 1.2.1 or later)
-my $ffmpeg_cmd = "/opt/sagetv/hdhomerun/ffmpeg.2013.09.01";
-
+  
 #
-# User configurable options end here
+# Default config file name
+# If the path is relative, it is relative to this script
 #
+my $config_file = "config.yml";
 
 #
 # Command line options
@@ -89,13 +53,29 @@ my $ffmpeg_cmd = "/opt/sagetv/hdhomerun/ffmpeg.2013.09.01";
 my $opt_d = 0;
 my $opt_q = 0;
 my $help = 0;
-if ( ! GetOptions( "d|debug" => \$opt_d,
-                   "q|quiet" => \$opt_q,
-                   "h|help"  => \$help,
+if ( ! GetOptions( "c|config=s" => \$config_file,
+                   "d|debug"  => \$opt_d,
+                   "q|quiet"  => \$opt_q,
+                   "h|help"   => \$help,
                  ) or $help ) {
     usage();
     exit;
 }
+
+#
+# Load YAML config file and run sanity checks
+#
+my $yaml = YAML::Tiny->read($config_file);
+ 
+# Get a reference to the first document
+my $config = $yaml->[0];
+ 
+# Where to log messages (if we are logging)
+my $log_dir  = $config->{logging}->{dir};
+my $log_file = $config->{logging}->{file};
+
+# Defined encoders
+my $encoders = $config->{encoders};
 
 # TO DO: sanity checks on encoder values
 
@@ -262,10 +242,12 @@ sub spawn_encoder {
 
     # TO DO: make sure all unneeded filehandles are disconnected from parent
 
-    my $name = $encoder->{name};
-    my $id = $encoder->{id};
-    my $tuner = $encoder->{tuner};
-    my $port = $encoder->{port};
+    my $name            = $encoder->{name};
+    my $port            = $encoder->{port};
+    my $cmd_tune        = $encoder->{cmd_tune};
+    my $cmd_encode      = $encoder->{cmd_encode};
+    my $cmd_postprocess = $encoder->{cmd_postprocess};
+
     $0 = "$me: $name";
 
     my $socket = IO::Socket::INET->new(LocalPort => $port,
@@ -379,36 +361,37 @@ sub spawn_encoder {
             #
 
             #
-            # Change the channel
+            # Tune the channel if defined
             #
-            info("Tuning channel $channel on device $id tuner $tuner filename: $file_path");
-            system("$hdhomerun_config_cmd $id set /tuner$tuner/vchannel $channel");
+            if ( $cmd_tune ) {
+                my $cmd = $cmd_tune;
+                $cmd =~ s/%%CHANNEL%%/$channel/g;
+                info("Tuning channel $channel for $file_path using: $cmd");
+                system($cmd);
+            }
 
             #
-            # Use the hdhomerun_config command to stream the file from the Prime.
-            # The stream is passed through ffmpeg (without changing codecs) to
-            # deal with possible corruption of the time code values, which seems
-            # to happen mostly when shows switch in and out of 480i mode during
-            # some commercials.
+            # Use the defined cmd_encode value to start generating the video data.
+            # If cmd_postprocess is defined pipe the video through it before saving the file.
             #
-            my @cmd1 = ();
-            push(@cmd1, $hdhomerun_config_cmd);
-            push(@cmd1, $id);
-            push(@cmd1, "save");
-            push(@cmd1, $tuner);
-            push(@cmd1, "-");
+            my @run_cmd = ();
+            my $cmd = $cmd_encode;
+            $cmd =~ s/%%CHANNEL%%/$channel/g;
+            $cmd =~ s/%%FILE_PATH%%/$file_path/g;
+            my @cmd1 = Text::ParseWords::shellwords($cmd);
+            push(@run_cmd, \@cmd1);
 
-            my @cmd2 = ();
-            push(@cmd2, $ffmpeg_cmd);
-            push(@cmd2, "-y");
-            push(@cmd2, "-v", "quiet");
-            push(@cmd2, "-i", "-");
-            push(@cmd2, "-f", "dvd");
-            push(@cmd2, "-vcodec", "copy");
-            push(@cmd2, "-acodec", "copy");
-            push(@cmd2, $file_path);
+            if ( $cmd_postprocess ) {
+                my $cmd = $cmd_postprocess;
+                $cmd =~ s/%%CHANNEL%%/$channel/g;
+                $cmd =~ s/%%FILE_PATH%%/$file_path/g;
+                my @cmd2 = Text::ParseWords::shellwords($cmd);
+                push(@run_cmd, '|');
+                push(@run_cmd, \@cmd2);
+            }
 
-            $encoder->{h} = IPC::Run::start \@cmd1, '|', \@cmd2;
+            info("Starting recording on channel $channel to $file_path");
+            $encoder->{h} = IPC::Run::start @run_cmd;
 
             $encoder->{recording} = { tuner_name => $tuner_name,
                                       channel    => $channel,
@@ -583,6 +566,7 @@ $me $version
 Start network encoders for SageTV.
 
 Usage: $me [options]
+    -c | --config       Config file
     -d | --debug        Don't go into background and show all debugging output
     -q | --quiet        Don't log anything
     -h | --help         Show help (this message)
